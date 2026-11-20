@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SAP Coach</string>
+    <string name="setup_name">SAP Coach Setup</string>
+    <string name="a11y_desc">SAP Coach öffnet auf deinen Befehl die Claude-App und tippt dort die Schritte, die du einmal angelernt hast (z. B. Projekt SAP Datasphere öffnen und Sprachmodus starten). Dafür muss die App Bildschirminhalte der Claude-App erkennen und Taps ausführen können. Es werden keine Inhalte gespeichert oder weitergegeben, außer den Beschriftungen der angelernten Schaltflächen auf diesem Handy.</string>
 </resources>

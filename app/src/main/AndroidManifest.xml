@@ -1,7 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Nur für den optionalen Autostart beim Verbinden mit dem Auto-Bluetooth -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- Damit die App die Claude-App finden und starten darf -->
+    <queries>
+        <package android:name="com.anthropic.claude" />
+    </queries>
 
     <application
         android:allowBackup="false"
@@ -9,15 +18,26 @@
         android:label="@string/app_name"
         android:theme="@android:style/Theme.Material.Light.DarkActionBar">
 
-        <!-- Kennzeichnet die App als Android-Auto-Medien-App -->
-        <meta-data
-            android:name="com.google.android.gms.car.application"
-            android:resource="@xml/automotive_app_desc" />
+        <!-- "SAP Coach": startet sofort den angelernten Ablauf (auch per "Hey Google, öffne SAP Coach") -->
+        <activity
+            android:name=".StartActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
 
+        <!-- "SAP Coach Setup": Einrichtung -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:windowSoftInputMode="adjustResize">
+            android:label="@string/setup_name">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -25,11 +45,16 @@
         </activity>
 
         <service
-            android:name=".CoachService"
-            android:exported="true">
+            android:name=".CoachAccessibilityService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
-                <action android:name="android.media.browse.MediaBrowserService" />
+                <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_config" />
         </service>
     </application>
 </manifest>

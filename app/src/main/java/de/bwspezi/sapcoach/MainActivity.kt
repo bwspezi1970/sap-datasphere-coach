@@ -1,36 +1,33 @@
 package de.bwspezi.sapcoach
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
-import android.content.ComponentName
+import android.app.AlertDialog
+import android.bluetooth.BluetoothManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
-import android.provider.OpenableColumns
-import android.support.v4.media.MediaBrowserCompat
-import android.support.v4.media.session.MediaControllerCompat
-import android.text.InputType
+import android.provider.Settings
 import android.view.ViewGroup
 import android.widget.Button
-import android.widget.EditText
+import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import java.util.concurrent.Executors
 
-/** Einstellungen auf dem Handy: API-Schlüssel, Quell-PDFs, Testfrage. */
+/** "SAP Coach Setup": Bedienungshilfe aktivieren, Ablauf anlernen, Autostart einstellen. */
 class MainActivity : Activity() {
 
-    companion object { private const val PICK_PDF = 42 }
+    companion object { private const val REQ_BT = 7 }
 
-    private val worker = Executors.newSingleThreadExecutor()
-    private lateinit var status: TextView
-    private lateinit var docsView: TextView
-    private lateinit var apiKey: EditText
-    private lateinit var model: EditText
-    private lateinit var question: EditText
-    private var browser: MediaBrowserCompat? = null
-    private var controller: MediaControllerCompat? = null
+    private lateinit var statusView: TextView
+    private lateinit var stepsView: TextView
+    private lateinit var btView: TextView
+    private lateinit var autoBox: CheckBox
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,7 +36,6 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, pad, pad, pad)
         }
-
         fun header(t: String) = root.addView(TextView(this).apply {
             text = t; textSize = 18f; setPadding(0, pad, 0, pad / 3)
         })
@@ -48,141 +44,103 @@ class MainActivity : Activity() {
             text = t; setOnClickListener { onClick() }
         })
 
-        root.addView(TextView(this).apply { text = "SAP Datasphere Coach"; textSize = 24f })
-        info("Sprachgesteuerte Fragen zu SAP Datasphere in Android Auto, beantwortet von Claude auf Basis deiner Quell-PDFs.")
+        root.addView(TextView(this).apply { text = "SAP Coach"; textSize = 24f })
+        info("Startet mit einem Befehl die Claude-App, öffnet dein Projekt SAP Datasphere und schaltet den Sprachmodus ein. Läuft über dein Claude-Pro-Abo, keine API nötig.")
 
-        header("1. Claude-API-Schlüssel")
-        info("Von console.anthropic.com → API Keys. Wird nur lokal auf diesem Handy gespeichert.")
-        apiKey = EditText(this).apply {
-            hint = "sk-ant-…"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setText(Prefs.apiKey(this@MainActivity))
-        }
-        root.addView(apiKey)
-        model = EditText(this).apply {
-            hint = "Modell (Standard: ${Prefs.DEFAULT_MODEL})"
-            setText(Prefs.model(this@MainActivity))
-        }
-        root.addView(model)
-        button("Speichern") {
-            Prefs.setApiKey(this, apiKey.text.toString())
-            Prefs.setModel(this, model.text.toString())
-            toast("Gespeichert")
+        statusView = TextView(this).apply { setPadding(0, pad / 2, 0, 0); textSize = 14f }
+        root.addView(statusView)
+
+        header("1. Bedienungshilfe einschalten")
+        info("Tippe auf „Einstellungen öffnen“ → Installierte Apps (bzw. Installierte Dienste) → SAP Coach → einschalten.\n\n" +
+            "Ist der Schalter ausgegraut („Eingeschränkte Einstellung“)? Dann zuerst „App-Info öffnen“ → oben rechts ⋮ → „Eingeschränkte Einstellungen zulassen“, danach erneut versuchen.")
+        button("Einstellungen öffnen") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        button("App-Info öffnen") {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
         }
 
-        header("2. Quelldokumente (PDF)")
-        info("Wähle die vereinbarten PDFs aus. Sie werden einmalig zu deinem Claude-API-Konto hochgeladen und bei jeder Frage mitgeschickt.")
-        docsView = TextView(this)
-        root.addView(docsView)
-        button("PDFs hinzufügen") {
-            val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE)
-                type = "application/pdf"
-                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-            }
-            startActivityForResult(i, PICK_PDF)
+        header("2. Ablauf anlernen")
+        info("SAP Coach öffnet Claude und legt eine leicht blaue Ebene darüber. Tippe ganz normal nacheinander: Menü → Projekte → SAP Datasphere → (neuer Chat, falls nötig) → Sprachmodus-Symbol. Jeder Tap wird gemerkt und an Claude weitergegeben. Zum Schluss in der Leiste „Fertig“.")
+        button("Ablauf anlernen") {
+            val s = CoachAccessibilityService.instance
+            if (s == null) toast("Bitte zuerst Schritt 1 erledigen.") else s.startLearning()
         }
-        button("Alle Dokumente entfernen") {
-            Prefs.clearDocs(this); refreshDocs()
-        }
+        stepsView = TextView(this)
+        root.addView(stepsView)
 
         header("3. Testen")
-        question = EditText(this).apply {
-            hint = "z. B. Was ist der Unterschied zwischen Analytic Model und Fact View?"
+        button("Jetzt starten (wie im Auto)") {
+            val s = CoachAccessibilityService.instance
+            if (s == null) toast("Bitte zuerst Schritt 1 erledigen.") else s.startReplay()
         }
-        root.addView(question)
-        button("Frage stellen (mit Sprachausgabe)") {
-            val q = question.text.toString().trim()
-            if (q.isEmpty()) toast("Bitte eine Frage eingeben")
-            else controller?.transportControls?.playFromSearch(q, Bundle()) ?: toast("Dienst noch nicht verbunden")
+
+        header("4. Starten im Auto")
+        info("• Symbol „SAP Coach“ antippen, oder\n" +
+            "• „Hey Google, öffne SAP Coach“ (Handy muss entsperrt sein), oder\n" +
+            "• automatisch beim Verbinden mit dem Auto (unten einrichten). Ist das Handy gesperrt, startet SAP Coach direkt nach dem Entsperren.\n\n" +
+            "Der Ton läuft über Bluetooth bzw. Android Auto. Das Handy bleibt dabei in der Halterung; Claude hört über das Handymikrofon.")
+        autoBox = CheckBox(this).apply {
+            text = "Automatisch starten, wenn sich das Handy mit dem Auto verbindet"
+            setOnCheckedChangeListener { _, checked ->
+                Store.setAutoStart(this@MainActivity, checked)
+                if (checked && Store.btAddress(this@MainActivity) == null) chooseBluetooth()
+            }
         }
-        button("Sprachausgabe stoppen") { controller?.transportControls?.stop() }
-        button("Gesprächsverlauf löschen") { Prefs.clearHistory(this); toast("Verlauf gelöscht") }
-
-        header("Im Auto")
-        info(
-            "Einmalig: In Android Auto → Entwicklereinstellungen → „Unbekannte Quellen“ aktivieren und im Launcher „SAP Coach“ einblenden.\n\n" +
-            "Fragen: „Hey Google, spiele <deine Frage> auf SAP Coach.“\n" +
-            "Oder SAP Coach in Android Auto öffnen und auf Mikrofon bzw. Suche tippen.\n" +
-            "Im Menü der App: letzte Antwort wiederholen, frühere Antworten erneut hören, neues Gespräch beginnen."
-        )
-
-        status = TextView(this).apply { setPadding(0, pad, 0, 0) }
-        root.addView(status)
+        root.addView(autoBox)
+        btView = TextView(this)
+        root.addView(btView)
+        button("Auto-Bluetooth auswählen") { chooseBluetooth() }
 
         setContentView(ScrollView(this).apply {
             addView(root, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         })
-        refreshDocs()
     }
 
-    override fun onStart() {
-        super.onStart()
-        val b = MediaBrowserCompat(this, ComponentName(this, CoachService::class.java),
-            object : MediaBrowserCompat.ConnectionCallback() {
-                override fun onConnected() {
-                    controller = MediaControllerCompat(this@MainActivity, browser!!.sessionToken)
-                }
-            }, null)
-        browser = b
-        b.connect()
+    override fun onResume() {
+        super.onResume()
+        refresh()
     }
 
-    override fun onStop() {
-        browser?.disconnect()
-        browser = null
-        controller = null
-        super.onStop()
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != PICK_PDF || resultCode != RESULT_OK || data == null) return
-        val uris = mutableListOf<Uri>()
-        data.clipData?.let { c -> for (i in 0 until c.itemCount) uris.add(c.getItemAt(i).uri) }
-        if (uris.isEmpty()) data.data?.let { uris.add(it) }
-        if (Prefs.apiKey(this).isBlank() && apiKey.text.isNotBlank()) Prefs.setApiKey(this, apiKey.text.toString())
-        upload(uris)
-    }
-
-    private fun upload(uris: List<Uri>) {
-        setStatus("Lade ${uris.size} PDF(s) hoch …")
-        worker.execute {
-            val client = ClaudeClient(this)
-            var ok = 0
-            val errors = mutableListOf<String>()
-            uris.forEach { uri ->
-                val name = displayName(uri)
-                try {
-                    val bytes = contentResolver.openInputStream(uri)!!.use { it.readBytes() }
-                    val id = client.uploadPdf(name, bytes)
-                    Prefs.addDoc(this, SourceDoc(id, name))
-                    ok++
-                } catch (e: Exception) {
-                    errors.add("$name: ${e.message}")
-                }
-            }
-            runOnUiThread {
-                refreshDocs()
-                setStatus("$ok hochgeladen." + if (errors.isEmpty()) "" else "\nFehler:\n" + errors.joinToString("\n"))
-            }
+    private fun refresh() {
+        val claudeInstalled = packageManager.getLaunchIntentForPackage(CoachAccessibilityService.CLAUDE) != null
+        val serviceOn = CoachAccessibilityService.instance != null
+        val steps = Store.steps(this)
+        statusView.text = buildString {
+            append(if (claudeInstalled) "✅ Claude-App gefunden\n" else "❌ Claude-App nicht installiert\n")
+            append(if (serviceOn) "✅ Bedienungshilfe aktiv\n" else "❌ Bedienungshilfe aus (Schritt 1)\n")
+            append(if (steps.isNotEmpty()) "✅ Ablauf angelernt (${steps.size} Schritte)" else "❌ Noch kein Ablauf angelernt (Schritt 2)")
         }
+        stepsView.text = if (steps.isEmpty()) "" else
+            "Angelernte Schritte:\n" + steps.mapIndexed { i, s -> "${i + 1}. ${s.describe()}" }.joinToString("\n")
+        autoBox.isChecked = Store.autoStart(this)
+        btView.text = "Auto-Bluetooth: " + (Store.btName(this) ?: "nicht ausgewählt")
     }
 
-    private fun displayName(uri: Uri): String {
-        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-            if (c.moveToFirst()) return c.getString(0) ?: "dokument.pdf"
+    @SuppressLint("MissingPermission")
+    private fun chooseBluetooth() {
+        if (Build.VERSION.SDK_INT >= 31 &&
+            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), REQ_BT)
+            return
         }
-        return "dokument.pdf"
+        val adapter = getSystemService(BluetoothManager::class.java)?.adapter
+        val devices = (try { adapter?.bondedDevices?.toList() } catch (_: SecurityException) { null }).orEmpty()
+        if (devices.isEmpty()) { toast("Keine gekoppelten Bluetooth-Geräte gefunden."); return }
+        val names = devices.map { d -> (try { d.name } catch (_: SecurityException) { null }) ?: d.address }
+        AlertDialog.Builder(this)
+            .setTitle("Welches Gerät ist dein Auto?")
+            .setItems(names.toTypedArray()) { _, which ->
+                Store.setBt(this, devices[which].address, names[which])
+                refresh()
+            }
+            .show()
     }
 
-    private fun refreshDocs() {
-        val docs = Prefs.docs(this)
-        docsView.text = if (docs.isEmpty()) "Noch keine Dokumente hinterlegt."
-        else docs.joinToString("\n") { "• " + it.name }
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_BT && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) chooseBluetooth()
+        else if (requestCode == REQ_BT) toast("Ohne Bluetooth-Berechtigung kein Autostart möglich.")
     }
 
-    private fun setStatus(t: String) { status.text = t }
-    private fun toast(t: String) = Toast.makeText(this, t, Toast.LENGTH_SHORT).show()
+    private fun toast(t: String) = Toast.makeText(this, t, Toast.LENGTH_LONG).show()
 }
